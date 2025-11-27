@@ -3,7 +3,7 @@ name: Multi-Platform Build and Package
 on:
   pull_request:
   push:
-    branches: master
+    branches: main
 
 jobs:
   # Linux ARM64 构建与打包
