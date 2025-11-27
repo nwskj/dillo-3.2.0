@@ -7,7 +7,8 @@ on:
     branches: [ main ]
 
 jobs:
-  build-freebsd-14.3:
+  # 关键修复：将 build-freebsd-14.3 改为 build-freebsd-14-3（移除小数点）
+  build-freebsd-14-3:
     runs-on: macos-13  # 必须用 macOS 宿主（支持 VirtualBox 运行 FreeBSD VM）
     name: Build on FreeBSD 14.3-RELEASE-p5 (amd64)
     steps:
@@ -17,7 +18,7 @@ jobs:
       - name: Build in FreeBSD 14.3 VM
         uses: vmactions/freebsd-vm@v1
         with:
-          release: 14.3  # 匹配你的 14.3-RELEASE-p5
+          release: 14.3  # 这里仍保留 14.3（是 VM 版本参数，允许小数点）
           arch: amd64
           usesh: true
           ssh_port: 2222
@@ -82,14 +83,13 @@ jobs:
             cd $PKG_DEST || exit 1
             tar -Jcvf $PKG_NAME-$PKG_VERSION-$FREEBSD_VERSION-$ARCH.txz $PKG_DIR
 
-      # 关键修复：步骤仅保留 uses（引用 retry Action），所有命令放入 with.command
       - name: Extract package from FreeBSD VM
         uses: nick-invision/retry@v2
         with:
           timeout_minutes: 5
           max_attempts: 3
           command: |
-            # 所有命令整合到这里，用换行分隔
+            set -x  # 开启调试输出（方便排查问题）
             mkdir -p ./artifacts
             ssh-keyscan -p 2222 localhost >> ~/.ssh/known_hosts
             scp -o StrictHostKeyChecking=no -P 2222 root@localhost:/tmp/artifacts/*.txz ./artifacts/
