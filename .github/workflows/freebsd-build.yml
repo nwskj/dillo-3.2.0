@@ -1,0 +1,46 @@
+name: FreeBSD Build & Package
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    name: Build on FreeBSD ${{ matrix.release }}
+    strategy:
+      matrix:
+        release: [14.0, 14.1, 14.2]  # 支持的 FreeBSD 版本
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Build in FreeBSD container
+        uses: vmactions/freebsd-vm@v1
+        with:
+          release: ${{ matrix.release }}
+          arch: amd64  # 指定架构
+          usesh: true
+          prepare: |
+            pkg install -y automake autoconf fltk gmake mbedtls zlib libpng libjpeg-turbo libwebp
+          run: |
+            # 生成配置脚本
+            ./autogen.sh
+            # 创建编译目录
+            mkdir -p build && cd build
+            # 配置编译参数（适配 FreeBSD 库路径）
+            ../configure CPPFLAGS='-I/usr/local/include' LDFLAGS='-L/usr/local/lib' --prefix=/usr/local
+            # 并行编译
+            gmake -j$(nproc)
+            # 打包输出
+            mkdir -p dillo-pkg/usr/local
+            gmake install DESTDIR=$(pwd)/dillo-pkg
+            tar -czf dillo-freebsd-${{ matrix.release }}-amd64.tar.gz -C dillo-pkg .
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: dillo-freebsd-${{ matrix.release }}-build
+          path: build/dillo-freebsd-${{ matrix.release }}-amd64.tar.gz
