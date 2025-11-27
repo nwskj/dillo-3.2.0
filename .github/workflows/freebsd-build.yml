@@ -7,45 +7,112 @@ on:
     branches: [ main ]
 
 jobs:
-  build:
-    runs-on: ubuntu-latest
-    name: Build on FreeBSD ${{ matrix.release }}
-    strategy:
-      matrix:
-        release: [14.0, 14.1, 14.2]  # 仅保留支持的具体版本号
+  build-freebsd-14.3:
+    runs-on: macos-13  # 必须用 macOS 宿主（支持 VirtualBox 运行 FreeBSD VM）
+    name: Build on FreeBSD 14.3-RELEASE-p5 (amd64)
     steps:
-      - name: Checkout code
+      - name: Checkout source code
         uses: actions/checkout@v4
 
-      - name: Build in FreeBSD container
+      - name: Build in FreeBSD 14.3 VM
         uses: vmactions/freebsd-vm@v1
         with:
-          release: ${{ matrix.release }}
-          arch: amd64
+          release: 14.3  # 匹配你实际的 14.3-RELEASE-p5（VM 会自动更新到最新补丁）
+          arch: amd64    # 与你的 uname -m 输出一致
           usesh: true
+          ssh_port: 2222 # 启用 SSH 端口映射（用于后续文件传输）
+          enable_password: true # 启用密码登录（方便 scp 传输）
+          password: root # VM 默认 root 密码（仅 CI 环境使用，安全可控）
           prepare: |
-            # 严格按照官方文档安装依赖
-            pkg install -y automake autoconf fltk gmake mbedtls zlib libpng libjpeg-turbo libwebp
+            # 强制更新软件源（确保获取最新补丁和依赖）
+            pkg update -f
+            # 安装依赖（与 FreeBSD 14.3 软件源完全匹配，包含你需要的库）
+            pkg install -y \
+              automake \
+              autoconf \
+              fltk \
+              gmake \
+              gcc \
+              g++ \
+              zlib-devel \
+              mbedtls-devel \
+              libpng-devel \
+              libjpeg-turbo-devel \
+              libwebp-devel
           run: |
-            # 生成配置脚本（针对 git 源码）
-            ./autogen.sh
-            # 创建并进入编译目录
-            mkdir -p build && cd build
-            # 配置编译参数（强制指定 FreeBSD 库路径）
-            ../configure \
-              CPPFLAGS='-I/usr/local/include' \
-              LDFLAGS='-L/usr/local/lib' \
-              --prefix=/usr/local \
-              --disable-threaded-dns  # 解决潜在的线程问题
-            # 并行编译
-            gmake -j$(nproc)
-            # 安装到临时目录并打包
-            mkdir -p dillo-pkg/usr/local
-            gmake install DESTDIR=$(pwd)/dillo-pkg
-            tar -czf dillo-freebsd-${{ matrix.release }}-amd64.tar.gz -C dillo-pkg .
+            # 定义打包参数（与你的系统版本对齐）
+            PKG_NAME="dillo"
+            PKG_VERSION="3.2.0"
+            FREEBSD_VERSION="14.3-RELEASE-p5"
+            ARCH="amd64"
+            PKG_DEST="/tmp/artifacts"
+            BUILD_DIR="./build"
 
-      - name: Upload artifact
+            # 创建工作目录
+            mkdir -p $BUILD_DIR $PKG_DEST
+            cd $BUILD_DIR || exit 1
+
+            # 生成配置脚本（针对 git 源码）
+            ../autogen.sh || { echo "autogen 失败"; exit 1; }
+
+            # 配置编译参数（适配 FreeBSD 14.3 库路径）
+            ../configure \
+              CPPFLAGS="-I/usr/local/include" \
+              LDFLAGS="-L/usr/local/lib" \
+              --prefix=/usr/local \
+              --disable-threaded-dns || { echo "configure 失败"; exit 1; }
+
+            # 并行编译（利用 VM 全部核心）
+            gmake -j$(nproc) || { echo "编译失败"; exit 1; }
+
+            # 安装到临时目录（DESTDIR 避免直接写入系统）
+            gmake install DESTDIR=$(pwd)/pkg-root || { echo "安装失败"; exit 1; }
+
+            # 构建 FreeBSD 标准包结构（包含 +MANIFEST 元数据）
+            PKG_DIR="$PKG_DEST/$PKG_NAME-$PKG_VERSION-$FREEBSD_VERSION-$ARCH"
+            mkdir -p $PKG_DIR/usr/local
+            cp -r $(pwd)/pkg-root/usr/local/* $PKG_DIR/usr/local/
+
+            # 生成 FreeBSD 包元数据（必须，否则 pkg 命令无法识别）
+            cat > $PKG_DIR/+MANIFEST << EOF
+            name: $PKG_NAME
+            version: $PKG_VERSION
+            origin: www/dillo
+            arch: $ARCH
+            osversion: 1403005  # 对应 14.3-RELEASE-p5（14.3 = 1403000，p5 = +5）
+            desc: "A small and fast web browser (built for FreeBSD 14.3)"
+            maintainer: $GITHUB_ACTOR@users.noreply.github.com
+            prefix: /usr/local
+            dependencies:
+              - fltk
+              - mbedtls
+              - libpng
+              - libjpeg-turbo
+              - libwebp
+              - zlib
+            EOF
+
+            # 打包为 FreeBSD 标准 txz 格式（比 tar.gz 更适配 pkg 包管理）
+            cd $PKG_DEST || exit 1
+            tar -Jcvf $PKG_NAME-$PKG_VERSION-$FREEBSD_VERSION-$ARCH.txz $PKG_DIR
+
+      - name: Extract package from FreeBSD VM
+        run: |
+          # 创建本地产物目录
+          mkdir -p ./artifacts
+          # 忽略 SSH 主机密钥验证（避免 CI 交互）
+          ssh-keyscan -p 2222 localhost >> ~/.ssh/known_hosts
+          # 通过 SCP 从 VM 复制打包产物（使用 root/root 认证）
+          scp -o StrictHostKeyChecking=no -P 2222 root@localhost:/tmp/artifacts/*.txz ./artifacts/
+        # 增加重试机制（应对网络波动）
+        uses: nick-invision/retry@v2
+        with:
+          timeout_minutes: 5
+          max_attempts: 3
+
+      - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
-          name: dillo-freebsd-${{ matrix.release }}-build
-          path: build/dillo-freebsd-${{ matrix.release }}-amd64.tar.gz
+          name: dillo-freebsd-14.3-amd64
+          path: ./artifacts/*.txz
+          retention-days: 30  # 产物保留 30 天（可按需调整）
