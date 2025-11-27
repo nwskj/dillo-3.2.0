@@ -97,14 +97,15 @@ jobs:
         docker cp freebsd-vm:/tmp/artifacts/. artifacts/
 
     - name: Upload artifacts
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4  # 更新为v4版本
       with:
         name: dillo-freebsd-amd64
         path: artifacts/*.txz
+        retention-days: 30  # v4版本需要显式指定保留天数（可选，默认90天）
 
     - name: Release
       if: startsWith(github.ref, 'refs/tags/')
-      uses: softprops/action-gh-release@v1
+      uses: softprops/action-gh-release@v2  # 同时更新此动作到最新版
       with:
         files: artifacts/*.txz
         name: Dillo ${{ github.ref_name }}
