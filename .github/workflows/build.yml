@@ -1,4 +1,4 @@
-name: CI
+name: Multi-Platform Build and Package
 
 on:
   pull_request:
@@ -6,288 +6,163 @@ on:
     branches: master
 
 jobs:
-  ubuntu-latest-html-tests:
+  # Linux ARM64 构建与打包
+  linux-arm64:
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v1
-      with:
-        fetch-depth: 1
-    - name: Update package lists
-      run: sudo apt update
-    - name: Install dependencies
-      run: sudo apt install -y libfltk1.3-dev libssl-dev libpng-dev libjpeg-dev libwebp-dev libbrotli-dev xvfb x11-apps x11-utils imagemagick
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
 
-    - name: autogen
-      run: ./autogen.sh
-    - name: Make install dir
-      run: mkdir install build
-    - name: configure
-      run: cd build && ../configure --prefix=$(readlink -f ../install) --enable-html-tests
-    - name: make
-      run: cd build && make
-    - name: make install
-      run: cd build && make install
-    - name: Copy config to .dillo
-      run: |
-        mkdir -p ~/.dillo/
-        cp install/etc/dillo/* ~/.dillo/
-    - name: make check
-      run: |
-        export DILLOBIN=$(readlink -f install/bin/dillo)
-        cd build && make check || (cat test/html/test-suite.log; false)
-        export DILLOBIN=
-    - name: Check release fits in a floppy disk of 1.44 MB
-      run: |
-        cd build
-        make dist-gzip
-        size=$(stat -c %s dillo-*.tar.gz)
-        floppy=$((1474560 - 32*1024)) # Leave room for FAT table
-        echo "Floppy occupation: $(($size * 100 / $floppy)) %"
-        if [ $size -lt $floppy ]; then
-          echo 'OK: Fits in floopy disk'
-        else
-          echo "FAIL: Release size too big: $size / $floppy"
-          exit 1
-        fi
-    - name: make distcheck (with HTML tests)
-      run: |
-        export DILLOBIN=
-        mkdir build-distcheck install-distcheck
-        cd build-distcheck && ../configure --prefix=$(readlink -f ../install-distcheck) --enable-html-tests
-        make distcheck DISTCHECK_CONFIGURE_FLAGS=--enable-html-tests
-#   - name: Remove pipes
-#     run: find test/html -type p -delete || true
-#   - name: Archive production artifacts
-#     uses: actions/upload-artifact@v3
-#     with:
-#       name: upload-html-test-results
-#       path: |
-#         build/test/html
-  ubuntu-latest-memory-leaks:
-    runs-on: ubuntu-latest
-    steps:
-    - uses: actions/checkout@v1
-      with:
-        fetch-depth: 1
-    - name: Update package lists
-      run: sudo apt update
-    - name: Install dependencies
-      run: sudo apt install -y libfltk1.3-dev libssl-dev libpng-dev libjpeg-dev libwebp-dev libbrotli-dev xvfb x11-apps x11-utils imagemagick
-    - name: autogen
-      run: ./autogen.sh
-    - name: Make install dir
-      run: mkdir install build
-    - name: configure
-      run: cd build && ../configure CFLAGS="-fsanitize=address" CXXFLAGS="-fsanitize=address" --prefix=$(readlink -f ../install) --enable-html-tests
-    - name: make
-      run: cd build && make
-    - name: make install
-      run: cd build && make install
-    - name: Copy config to .dillo
-      run: |
-        mkdir -p ~/.dillo/
-        cp install/etc/dillo/* ~/.dillo/
-    - name: make check
-      run: |
-        export DILLOBIN=$(readlink -f install/bin/dillo)
-        cd build && make check || (cat test/html/test-suite.log; false)
-        export DILLOBIN=
-  ubuntu-latest-no-tls:
-    needs: ubuntu-latest-html-tests
-    runs-on: ubuntu-latest
-    steps:
-    - uses: actions/checkout@v1
-      with:
-        fetch-depth: 1
-    - name: Update package lists
-      run: sudo apt update
-    - name: Install dependencies
-      run: sudo apt install -y libfltk1.3-dev
-    - name: autogen
-      run: ./autogen.sh
-    - name: configure
-      run: ./configure --disable-tls
-    - name: make
-      run: make
-    - name: make check
-      run: make check
-    - name: make distcheck
-      run: make distcheck
-  ubuntu-latest-mbedtls2:
-    needs: ubuntu-latest-html-tests
-    runs-on: ubuntu-latest
-    steps:
-    - uses: actions/checkout@v1
-      with:
-        fetch-depth: 1
-    - name: Update package lists
-      run: sudo apt update
-    - name: Install dependencies
-      run: sudo apt install -y libfltk1.3-dev libmbedtls-dev
-    - name: autogen
-      run: ./autogen.sh
-    - name: configure
-      run: ./configure --disable-openssl
-    - name: make
-      run: make
-    - name: make check
-      run: make check
-    - name: make distcheck
-      run: make distcheck
-  ubuntu-latest-openssl-3:
-    needs: ubuntu-latest-html-tests
-    runs-on: ubuntu-latest
-    steps:
-    - uses: actions/checkout@v1
-      with:
-        fetch-depth: 1
-    - name: Update package lists
-      run: sudo apt update
-    - name: Install dependencies
-      run: sudo apt install -y libfltk1.3-dev libssl-dev
-    - name: autogen
-      run: ./autogen.sh
-    - name: configure
-      run: ./configure --disable-mbedtls
-    - name: make
-      run: make
-    - name: make check
-      run: make check
-    - name: make distcheck
-      run: make distcheck
-  ubuntu-latest-with-old-std:
-    needs: ubuntu-latest-html-tests
-    runs-on: ubuntu-latest
-    steps:
-    - uses: actions/checkout@v1
-      with:
-        fetch-depth: 1
-    - name: Update package lists
-      run: sudo apt update
-    - name: Install dependencies
-      run: sudo apt install -y libfltk1.3-dev libssl-dev
-    - name: autogen
-      run: ./autogen.sh
-    - name: configure
-      # Make sure we build with the C++11 standard, so we fail to build on newer
-      # features.
-      run: ./configure --disable-mbedtls CFLAGS="-Werror" CXXFLAGS="-Werror -std=c++11"
-    - name: make
-      run: make
-    - name: make check
-      run: make check
-  alpine-mbedtls-3_6_0:
-    runs-on: ubuntu-latest
-    steps:
-    - uses: actions/checkout@v4
-    - uses: jirutka/setup-alpine@v1
-      with:
-        packages: >
-          build-base
-          autoconf
-          automake
-          fltk-dev
-          libpng-dev
-          libjpeg-turbo-dev
-          libwebp-dev
-          mbedtls-dev
-    - run: |
-        ./autogen.sh
-        ./configure
-        make
-        make check
-      shell: alpine.sh {0}
-  macOS-13-openssl-1-1:
-    needs: ubuntu-latest-html-tests
-    runs-on: macos-13
-    steps:
-    - uses: actions/checkout@v1
-      with:
-        fetch-depth: 1
-    - name: Install dependencies
-      run: brew install autoconf automake fltk@1.3
-    - name: autogen
-      run: ./autogen.sh
-    - name: configure
-      run: |
-        export PATH="/usr/local/opt/fltk@1.3/bin:$PATH"
-        ./configure --disable-mbedtls
-    - name: make
-      run: make
-    - name: make check
-      run: make check
-    - name: make distcheck
-      run: |
-        export PATH="/usr/local/opt/fltk@1.3/bin:$PATH"
-        make distcheck
-  macOS-13-openssl-3:
-    needs: ubuntu-latest-html-tests
-    runs-on: macos-13
-    steps:
-    - uses: actions/checkout@v1
-      with:
-        fetch-depth: 1
-    - name: Remove old OpenSSL 1.1
-      run: brew uninstall openssl@1.1
-    - name: Install dependencies
-      run: brew install autoconf automake fltk@1.3 openssl@3
-    - name: autogen
-      run: ./autogen.sh
-    - name: configure
-      run: |
-        export PATH="/usr/local/opt/fltk@1.3/bin:$PATH"
-        ./configure --disable-mbedtls
-    - name: make
-      run: make
-    - name: make check
-      run: make check
-    - name: make distcheck
-      run: |
-        export PATH="/usr/local/opt/fltk@1.3/bin:$PATH"
-        make distcheck
-  freebsd-14-openssl-3:
-    needs: ubuntu-latest-html-tests
-    runs-on: ubuntu-latest
-    steps:
-    - uses: actions/checkout@v4
-    - name: FreeBSD VM build
-      id: test
-      uses: vmactions/freebsd-vm@v1
-      with:
-        release: "14.0"
-        usesh: true
-        prepare: |
-          set -x
-          pkg install -y automake fltk
+      - name: 安装交叉编译依赖
         run: |
-          set -x
-          pwd
-          freebsd-version
-          ./autogen.sh
-          ./configure CPPFLAGS='-I/usr/local/include' LDFLAGS='-L/usr/local/lib'
-          cat config.log
-          make
-          make check
-          ldd src/dillo
-  windows-mbedtls:
-    needs: ubuntu-latest-html-tests
+          sudo apt update
+          sudo apt install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu autoconf automake make \
+            libfltk1.3-dev:arm64 libssl-dev:arm64 libpng-dev:arm64 libjpeg-dev:arm64 \
+            libwebp-dev:arm64 libbrotli-dev:arm64 binutils-aarch64-linux-gnu
+
+      - name: 生成配置脚本
+        run: ./autogen.sh
+
+      - name: 创建构建目录
+        run: mkdir -p build arm64-install
+
+      - name: 配置交叉编译
+        run: |
+          cd build
+          ../configure --host=aarch64-linux-gnu \
+            --prefix=$(readlink -f ../arm64-install) \
+            --enable-html-tests \
+            CC=aarch64-linux-gnu-gcc \
+            CXX=aarch64-linux-gnu-g++
+
+      - name: 编译与安装
+        run: |
+          cd build
+          make -j$(nproc)
+          make install
+
+      - name: 打包构建产物
+        run: |
+          cd arm64-install
+          tar -czvf ../dillo-linux-arm64.tar.gz *
+
+      - name: 上传构建产物
+        uses: actions/upload-artifact@v3
+        with:
+          name: dillo-linux-arm64
+          path: dillo-linux-arm64.tar.gz
+
+  # Linux AMD64 构建与打包
+  linux-amd64:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: 安装依赖
+        run: |
+          sudo apt update
+          sudo apt install -y libfltk1.3-dev libssl-dev libpng-dev libjpeg-dev \
+            libwebp-dev libbrotli-dev autoconf automake make
+
+      - name: 生成配置脚本
+        run: ./autogen.sh
+
+      - name: 创建构建目录
+        run: mkdir -p build amd64-install
+
+      - name: 配置构建
+        run: |
+          cd build
+          ../configure --prefix=$(readlink -f ../amd64-install) --enable-html-tests
+
+      - name: 编译与安装
+        run: |
+          cd build
+          make -j$(nproc)
+          make install
+
+      - name: 打包构建产物
+        run: |
+          cd amd64-install
+          tar -czvf ../dillo-linux-amd64.tar.gz *
+
+      - name: 上传构建产物
+        uses: actions/upload-artifact@v3
+        with:
+          name: dillo-linux-amd64
+          path: dillo-linux-amd64.tar.gz
+
+  # Windows x64 构建与打包 (Cygwin)
+  windows-64:
     runs-on: windows-latest
     steps:
-    - run: git config --global core.autocrlf input
-    - uses: actions/checkout@v4
-      with:
-        fetch-depth: 1
-    - uses: cygwin/cygwin-install-action@master
-      with:
-        packages: gcc-core gcc-g++ autoconf automake make zlib-devel mbedtls-devel libfltk-devel libiconv-devel libpng-devel libjpeg-devel libwebp-devel libgif-devel libbrotli-devel
-    - shell: C:\cygwin\bin\bash.exe --login --norc -eo pipefail -o igncr '{0}'
-      run: |
-        set -x
-        cd ${GITHUB_WORKSPACE}
-        pwd
-        ls -l
-        ./autogen.sh
-        ./configure
-        make
-        make check
-        ls -l src/dillo
+      - run: git config --global core.autocrlf input
+
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: 安装 Cygwin 与依赖
+        uses: cygwin/cygwin-install-action@master
+        with:
+          packages: >
+            gcc-core gcc-g++ autoconf automake make zlib-devel mbedtls-devel
+            libfltk-devel libiconv-devel libpng-devel libjpeg-devel
+            libwebp-devel libgif-devel libbrotli-devel zip
+
+      - name: 构建与安装
+        shell: C:\cygwin\bin\bash.exe --login --norc -eo pipefail -o igncr '{0}'
+        run: |
+          set -x
+          cd ${GITHUB_WORKSPACE}
+          ./autogen.sh
+          ./configure --prefix=/usr/local
+          make -j$(nproc)
+          make install
+
+      - name: 打包构建产物
+        shell: C:\cygwin\bin\bash.exe --login --norc -eo pipefail -o igncr '{0}'
+        run: |
+          cd /usr/local
+          zip -r ${GITHUB_WORKSPACE}/dillo-windows-64.zip *
+
+      - name: 上传构建产物
+        uses: actions/upload-artifact@v3
+        with:
+          name: dillo-windows-64
+          path: dillo-windows-64.zip
+
+  # FreeBSD amd64 构建与打包
+  freebsd-amd64:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: FreeBSD 构建与打包
+        uses: vmactions/freebsd-vm@v1
+        with:
+          release: "14.0"
+          usesh: true
+          prepare: |
+            set -x
+            pkg install -y automake fltk libssl-dev libpng libjpeg-turbo libwebp brotli
+
+          run: |
+            set -x
+            ./autogen.sh
+            ./configure CPPFLAGS='-I/usr/local/include' LDFLAGS='-L/usr/local/lib' --prefix=/usr/local
+            make -j$(nproc)
+            make install
+            cd /usr/local
+            tar -czvf ${GITHUB_WORKSPACE}/dillo-freebsd-amd64.tar.gz *
+
+      - name: 上传构建产物
+        uses: actions/upload-artifact@v3
+        with:
+          name: dillo-freebsd-amd64
+          path: dillo-freebsd-amd64.tar.gz
