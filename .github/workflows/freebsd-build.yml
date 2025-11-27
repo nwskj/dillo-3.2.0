@@ -1,124 +1,293 @@
-name: FreeBSD Build & Package
+name: CI
 
 on:
-  push:
-    branches: [ main ]
   pull_request:
-    branches: [ main ]
+  push:
+    branches: master
 
 jobs:
-  build-freebsd-14-3:
-    # 关键修复1：替换废弃的 macos-13 为 macos-15-intel（Intel 架构，兼容 VirtualBox）
-    runs-on: macos-15-intel
-    name: Build on FreeBSD 14.3-RELEASE-p5 (amd64)
+  ubuntu-latest-html-tests:
+    runs-on: ubuntu-latest
     steps:
-      - name: Checkout source code
-        uses: actions/checkout@v4
+    - uses: actions/checkout@v1
+      with:
+        fetch-depth: 1
+    - name: Update package lists
+      run: sudo apt update
+    - name: Install dependencies
+      run: sudo apt install -y libfltk1.3-dev libssl-dev libpng-dev libjpeg-dev libwebp-dev libbrotli-dev xvfb x11-apps x11-utils imagemagick
 
-      - name: Build in FreeBSD 14.3 VM
-        uses: vmactions/freebsd-vm@v1
-        with:
-          release: 14.3
-          arch: amd64
-          usesh: true
-          # 移除无效的 sync 参数，改用 Action 内置共享目录 /vagrant（100% 稳定同步）
-          prepare: |
-            # 关键优化：开启调试输出，显示所有命令执行细节
-            set -x
-            # 强制更新软件源，解决包缓存过期问题
-            pkg update -f || { echo "❌ pkg update 失败"; exit 1; }
-            # 逐个安装依赖，明确报错点（避免批量安装隐藏失败）
-            pkg install -y automake || { echo "❌ automake 安装失败"; exit 1; }
-            pkg install -y autoconf || { echo "❌ autoconf 安装失败"; exit 1; }
-            pkg install -y fltk || { echo "❌ fltk 安装失败"; exit 1; }
-            pkg install -y gmake || { echo "❌ gmake 安装失败"; exit 1; }
-            pkg install -y gcc || { echo "❌ gcc 安装失败"; exit 1; }
-            pkg install -y g++ || { echo "❌ g++ 安装失败"; exit 1; }
-            pkg install -y zlib-devel || { echo "❌ zlib-devel 安装失败"; exit 1; }
-            pkg install -y mbedtls-devel || { echo "❌ mbedtls-devel 安装失败"; exit 1; }
-            pkg install -y libpng-devel || { echo "❌ libpng-devel 安装失败"; exit 1; }
-            pkg install -y libjpeg-turbo-devel || { echo "❌ libjpeg-turbo-devel 安装失败"; exit 1; }
-            pkg install -y libwebp-devel || { echo "❌ libwebp-devel 安装失败"; exit 1; }
-            # 验证依赖是否安装成功（可选，进一步确保）
-            pkg info fltk mbedtls libpng || { echo "❌ 核心依赖未找到"; exit 1; }
-            set +x
-          run: |
-            # 开启调试输出，便于排查问题
-            set -x
-            # 定义参数（使用 /vagrant 共享目录，默认同步到宿主工作目录）
-            PKG_NAME="dillo"
-            PKG_VERSION="3.2.0"
-            FREEBSD_VERSION="14.3-RELEASE-p5"
-            ARCH="amd64"
-            # 关键：PKG_DEST 指向 VM 中的 /vagrant/artifacts（自动同步到宿主 ./artifacts）
-            PKG_DEST="/vagrant/artifacts"
-            BUILD_DIR="./build"
-
-            # 创建目录（确保权限可写）
-            mkdir -p $BUILD_DIR $PKG_DEST || { echo "❌ 创建目录失败"; exit 1; }
-            cd $BUILD_DIR || { echo "❌ 进入 build 目录失败"; exit 1; }
-
-            # 生成配置脚本（针对 Git 源码）
-            ../autogen.sh || { echo "❌ autogen 失败（可能缺少 autoconf/automake）"; exit 1; }
-            # 配置编译参数（明确指定库路径，避免 FreeBSD 路径问题）
-            ../configure \
-              CPPFLAGS="-I/usr/local/include -I/usr/local/include/fltk" \
-              LDFLAGS="-L/usr/local/lib -L/usr/local/lib/fltk" \
-              --prefix=/usr/local \
-              --disable-threaded-dns || { echo "❌ configure 失败（可能缺少依赖库）"; exit 1; }
-            # 并行编译（使用所有 CPU 核心，加速构建）
-            gmake -j$(nproc) || { echo "❌ 编译失败（查看编译日志）"; exit 1; }
-            # 安装到临时目录（DESTDIR 避免污染 VM 系统）
-            gmake install DESTDIR=$(pwd)/pkg-root || { echo "❌ 安装失败"; exit 1; }
-
-            # 构建 FreeBSD 标准包结构
-            PKG_DIR="$PKG_DEST/$PKG_NAME-$PKG_VERSION-$FREEBSD_VERSION-$ARCH"
-            mkdir -p $PKG_DIR/usr/local || { echo "❌ 创建包目录失败"; exit 1; }
-            # 复制安装文件到包目录
-            cp -r $(pwd)/pkg-root/usr/local/* $PKG_DIR/usr/local/ || { echo "❌ 复制文件失败"; exit 1; }
-
-            # 生成 FreeBSD 包元数据（+MANIFEST 是 pkg 命令识别的必需文件）
-            cat > $PKG_DIR/+MANIFEST << EOF
-            name: $PKG_NAME
-            version: $PKG_VERSION
-            origin: www/dillo
-            arch: $ARCH
-            osversion: 1403005
-            desc: "A small and fast web browser (built for FreeBSD 14.3-RELEASE-p5)"
-            maintainer: $GITHUB_ACTOR@users.noreply.github.com
-            prefix: /usr/local
-            dependencies:
-              - fltk
-              - mbedtls
-              - libpng
-              - libjpeg-turbo
-              - libwebp
-              - zlib
-            EOF
-
-            # 打包为 FreeBSD 标准 txz 格式（-J 表示 xz 压缩，符合 pkg 规范）
-            cd $PKG_DEST || { echo "❌ 进入 artifacts 目录失败"; exit 1; }
-            tar -Jcvf $PKG_NAME-$PKG_VERSION-$FREEBSD_VERSION-$ARCH.txz $PKG_DIR || { echo "❌ 打包失败"; exit 1; }
-
-            # 验证包文件是否生成（关键校验步骤）
-            echo "✅ 打包完成，文件列表："
-            ls -lh $PKG_DEST/*.txz || { echo "❌ 包文件未生成"; exit 1; }
-            set +x
-
-      - name: Verify artifact exists (宿主系统校验)
+    - name: autogen
+      run: ./autogen.sh
+    - name: Make install dir
+      run: mkdir install build
+    - name: configure
+      run: cd build && ../configure --prefix=$(readlink -f ../install) --enable-html-tests
+    - name: make
+      run: cd build && make
+    - name: make install
+      run: cd build && make install
+    - name: Copy config to .dillo
+      run: |
+        mkdir -p ~/.dillo/
+        cp install/etc/dillo/* ~/.dillo/
+    - name: make check
+      run: |
+        export DILLOBIN=$(readlink -f install/bin/dillo)
+        cd build && make check || (cat test/html/test-suite.log; false)
+        export DILLOBIN=
+    - name: Check release fits in a floppy disk of 1.44 MB
+      run: |
+        cd build
+        make dist-gzip
+        size=$(stat -c %s dillo-*.tar.gz)
+        floppy=$((1474560 - 32*1024)) # Leave room for FAT table
+        echo "Floppy occupation: $(($size * 100 / $floppy)) %"
+        if [ $size -lt $floppy ]; then
+          echo 'OK: Fits in floopy disk'
+        else
+          echo "FAIL: Release size too big: $size / $floppy"
+          exit 1
+        fi
+    - name: make distcheck (with HTML tests)
+      run: |
+        export DILLOBIN=
+        mkdir build-distcheck install-distcheck
+        cd build-distcheck && ../configure --prefix=$(readlink -f ../install-distcheck) --enable-html-tests
+        make distcheck DISTCHECK_CONFIGURE_FLAGS=--enable-html-tests
+#   - name: Remove pipes
+#     run: find test/html -type p -delete || true
+#   - name: Archive production artifacts
+#     uses: actions/upload-artifact@v3
+#     with:
+#       name: upload-html-test-results
+#       path: |
+#         build/test/html
+  ubuntu-latest-memory-leaks:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v1
+      with:
+        fetch-depth: 1
+    - name: Update package lists
+      run: sudo apt update
+    - name: Install dependencies
+      run: sudo apt install -y libfltk1.3-dev libssl-dev libpng-dev libjpeg-dev libwebp-dev libbrotli-dev xvfb x11-apps x11-utils imagemagick
+    - name: autogen
+      run: ./autogen.sh
+    - name: Make install dir
+      run: mkdir install build
+    - name: configure
+      run: cd build && ../configure CFLAGS="-fsanitize=address" CXXFLAGS="-fsanitize=address" --prefix=$(readlink -f ../install) --enable-html-tests
+    - name: make
+      run: cd build && make
+    - name: make install
+      run: cd build && make install
+    - name: Copy config to .dillo
+      run: |
+        mkdir -p ~/.dillo/
+        cp install/etc/dillo/* ~/.dillo/
+    - name: make check
+      run: |
+        export DILLOBIN=$(readlink -f install/bin/dillo)
+        cd build && make check || (cat test/html/test-suite.log; false)
+        export DILLOBIN=
+  ubuntu-latest-no-tls:
+    needs: ubuntu-latest-html-tests
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v1
+      with:
+        fetch-depth: 1
+    - name: Update package lists
+      run: sudo apt update
+    - name: Install dependencies
+      run: sudo apt install -y libfltk1.3-dev
+    - name: autogen
+      run: ./autogen.sh
+    - name: configure
+      run: ./configure --disable-tls
+    - name: make
+      run: make
+    - name: make check
+      run: make check
+    - name: make distcheck
+      run: make distcheck
+  ubuntu-latest-mbedtls2:
+    needs: ubuntu-latest-html-tests
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v1
+      with:
+        fetch-depth: 1
+    - name: Update package lists
+      run: sudo apt update
+    - name: Install dependencies
+      run: sudo apt install -y libfltk1.3-dev libmbedtls-dev
+    - name: autogen
+      run: ./autogen.sh
+    - name: configure
+      run: ./configure --disable-openssl
+    - name: make
+      run: make
+    - name: make check
+      run: make check
+    - name: make distcheck
+      run: make distcheck
+  ubuntu-latest-openssl-3:
+    needs: ubuntu-latest-html-tests
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v1
+      with:
+        fetch-depth: 1
+    - name: Update package lists
+      run: sudo apt update
+    - name: Install dependencies
+      run: sudo apt install -y libfltk1.3-dev libssl-dev
+    - name: autogen
+      run: ./autogen.sh
+    - name: configure
+      run: ./configure --disable-mbedtls
+    - name: make
+      run: make
+    - name: make check
+      run: make check
+    - name: make distcheck
+      run: make distcheck
+  ubuntu-latest-with-old-std:
+    needs: ubuntu-latest-html-tests
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v1
+      with:
+        fetch-depth: 1
+    - name: Update package lists
+      run: sudo apt update
+    - name: Install dependencies
+      run: sudo apt install -y libfltk1.3-dev libssl-dev
+    - name: autogen
+      run: ./autogen.sh
+    - name: configure
+      # Make sure we build with the C++11 standard, so we fail to build on newer
+      # features.
+      run: ./configure --disable-mbedtls CFLAGS="-Werror" CXXFLAGS="-Werror -std=c++11"
+    - name: make
+      run: make
+    - name: make check
+      run: make check
+  alpine-mbedtls-3_6_0:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - uses: jirutka/setup-alpine@v1
+      with:
+        packages: >
+          build-base
+          autoconf
+          automake
+          fltk-dev
+          libpng-dev
+          libjpeg-turbo-dev
+          libwebp-dev
+          mbedtls-dev
+    - run: |
+        ./autogen.sh
+        ./configure
+        make
+        make check
+      shell: alpine.sh {0}
+  macOS-13-openssl-1-1:
+    needs: ubuntu-latest-html-tests
+    runs-on: macos-13
+    steps:
+    - uses: actions/checkout@v1
+      with:
+        fetch-depth: 1
+    - name: Install dependencies
+      run: brew install autoconf automake fltk@1.3
+    - name: autogen
+      run: ./autogen.sh
+    - name: configure
+      run: |
+        export PATH="/usr/local/opt/fltk@1.3/bin:$PATH"
+        ./configure --disable-mbedtls
+    - name: make
+      run: make
+    - name: make check
+      run: make check
+    - name: make distcheck
+      run: |
+        export PATH="/usr/local/opt/fltk@1.3/bin:$PATH"
+        make distcheck
+  macOS-13-openssl-3:
+    needs: ubuntu-latest-html-tests
+    runs-on: macos-13
+    steps:
+    - uses: actions/checkout@v1
+      with:
+        fetch-depth: 1
+    - name: Remove old OpenSSL 1.1
+      run: brew uninstall openssl@1.1
+    - name: Install dependencies
+      run: brew install autoconf automake fltk@1.3 openssl@3
+    - name: autogen
+      run: ./autogen.sh
+    - name: configure
+      run: |
+        export PATH="/usr/local/opt/fltk@1.3/bin:$PATH"
+        ./configure --disable-mbedtls
+    - name: make
+      run: make
+    - name: make check
+      run: make check
+    - name: make distcheck
+      run: |
+        export PATH="/usr/local/opt/fltk@1.3/bin:$PATH"
+        make distcheck
+  freebsd-14-openssl-3:
+    needs: ubuntu-latest-html-tests
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: FreeBSD VM build
+      id: test
+      uses: vmactions/freebsd-vm@v1
+      with:
+        release: "14.0"
+        usesh: true
+        prepare: |
+          set -x
+          pkg install -y automake fltk
         run: |
-          # 验证共享目录中的文件是否同步到宿主系统
-          echo "✅ 宿主系统 artifacts 目录内容："
-          ls -lh ./artifacts/*.txz
-          # 若文件不存在，直接报错终止工作流
-          if [ -z "$(ls -A ./artifacts/*.txz 2>/dev/null)" ]; then
-            echo "❌ 错误：包文件未从 VM 同步到宿主系统"
-            exit 1
-          fi
-
-      - name: Upload build artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: dillo-freebsd-14.3-amd64
-          path: ./artifacts/*.txz
-          retention-days: 30
+          set -x
+          pwd
+          freebsd-version
+          ./autogen.sh
+          ./configure CPPFLAGS='-I/usr/local/include' LDFLAGS='-L/usr/local/lib'
+          cat config.log
+          make
+          make check
+          ldd src/dillo
+  windows-mbedtls:
+    needs: ubuntu-latest-html-tests
+    runs-on: windows-latest
+    steps:
+    - run: git config --global core.autocrlf input
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 1
+    - uses: cygwin/cygwin-install-action@master
+      with:
+        packages: gcc-core gcc-g++ autoconf automake make zlib-devel mbedtls-devel libfltk-devel libiconv-devel libpng-devel libjpeg-devel libwebp-devel libgif-devel libbrotli-devel
+    - shell: C:\cygwin\bin\bash.exe --login --norc -eo pipefail -o igncr '{0}'
+      run: |
+        set -x
+        cd ${GITHUB_WORKSPACE}
+        pwd
+        ls -l
+        ./autogen.sh
+        ./configure
+        make
+        make check
+        ls -l src/dillo
