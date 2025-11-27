@@ -1,105 +1,41 @@
-name: FreeBSD Build and Package
+name: FreeBSD Build & Package
 
 on:
   push:
-    branches: [ main, master ]
-    tags: [ 'v*' ]
+    branches: [ main ]
   pull_request:
-    branches: [ main, master ]
+    branches: [ main ]
 
 jobs:
-  build-freebsd:
-    runs-on: macos-13
-
+  build:
+    runs-on: ubuntu-latest
+    name: Build on FreeBSD
     steps:
-    - name: Checkout source code
-      uses: actions/checkout@v4
+      - name: Checkout code
+        uses: actions/checkout@v4
 
-    - name: Build in FreeBSD VM
-      uses: vmactions/freebsd-vm@v1
-      with:
-        usesh: true
-        release: 14.3
-        ssh_port: 2222
-        prepare: |
-          pkg update -f
-          pkg install -y \
-            autoconf \
-            automake \
-            fltk \
-            gmake \
-            gcc \
-            g++ \
-            zlib-devel \
-            libssl-devel \
-            libpng-devel \
-            libjpeg-turbo-devel \
-            webp-devel \
-            rsync
-        run: |
-          PKGNAME="dillo"
-          PKGVERSION="3.2.0"
-          ARCH="amd64"
-          PKGDEST="./packages"
-          WRKSRC="./work"
+      - name: Build in FreeBSD container
+        uses: vmactions/freebsd-vm@v1
+        with:
+          release: 14.0
+          usesh: true
+          prepare: |
+            pkg install -y automake autoconf fltk gmake mbedtls zlib libpng libjpeg-turbo libwebp wget
+          run: |
+            # 编译配置（指定 FreeBSD 库路径）
+            ./autogen.sh
+            mkdir build && cd build
+            ../configure CPPFLAGS='-I/usr/local/include' LDFLAGS='-L/usr/local/lib' --prefix=/usr/local
+            gmake -j$(nproc)
+            
+            # 打包二进制文件
+            mkdir -p dillo-pkg/usr/local/bin
+            mkdir -p dillo-pkg/usr/local/share
+            gmake install DESTDIR=$(pwd)/dillo-pkg
+            tar -czf dillo-freebsd-amd64.tar.gz -C dillo-pkg .
 
-          mkdir -p $WRKSRC $PKGDEST
-          cd $WRKSRC || exit 1
-          cp -r ../. dillo
-          cd dillo || exit 1
-          ./autogen.sh || exit 1
-          mkdir -p build && cd build || exit 1
-          ../configure \
-            --prefix=/usr/local \
-            CPPFLAGS='-I/usr/local/include' \
-            LDFLAGS='-L/usr/local/lib' || exit 1
-          gmake || exit 1
-          DESTDIR=$WRKSRC/stage gmake install || exit 1
-
-          mkdir -p $PKGDEST/$PKGNAME-$PKGVERSION-$ARCH/usr/local
-          cp -r $WRKSRC/stage/usr/local/* $PKGDEST/$PKGNAME-$PKGVERSION-$ARCH/usr/local/
-          cat > $PKGDEST/$PKGNAME-$PKGVERSION-$ARCH/+MANIFEST << EOF
-          name: $PKGNAME
-          version: $PKGVERSION
-          origin: www/dillo
-          arch: $ARCH
-          desc: A small and fast web browser
-          maintainer: $GITHUB_ACTOR@users.noreply.github.com
-          prefix: /usr/local
-          EOF
-          cd $PKGDEST || exit 1
-          tar -Jcvf $PKGNAME-$PKGVERSION-$ARCH.txz $PKGNAME-$PKGVERSION-$ARCH
-
-          mkdir -p /tmp/artifacts
-          cp $PKGNAME-$PKGVERSION-$ARCH.txz /tmp/artifacts/
-
-    # 关键修复：拆分步骤，将 retry 逻辑单独作为一个步骤（使用 uses），命令放在 with.command 中
-    - name: Extract artifacts from FreeBSD VM
-      uses: nick-invision/retry@v2  # 单独步骤使用 uses 引用 retry Action
-      with:
-        timeout_minutes: 5
-        max_attempts: 3
-        # 所有命令整合到 command 中，用换行分隔
-        command: |
-          mkdir -p artifacts
-          ssh-keyscan -p 2222 localhost >> ~/.ssh/known_hosts
-          # 禁用严格主机密钥检查，避免交互
-          scp -o StrictHostKeyChecking=no -P 2222 root@localhost:/tmp/artifacts/*.txz artifacts/
-      env:
-        SSHPASS: root  # 密码仅用于参考，retry Action 不直接使用，scp 需确保密码正确
-
-    - name: Upload artifacts
-      uses: actions/upload-artifact@v4
-      with:
-        name: dillo-freebsd-amd64
-        path: artifacts/*.txz
-        retention-days: 30
-
-    - name: Release
-      if: startsWith(github.ref, 'refs/tags/')
-      uses: softprops/action-gh-release@v2
-      with:
-        files: artifacts/*.txz
-        name: Dillo ${{ github.ref_name }}
-        draft: false
-        prerelease: false
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: dillo-freebsd-build
+          path: build/dillo-freebsd-amd64.tar.gz
